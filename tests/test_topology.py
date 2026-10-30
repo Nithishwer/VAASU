@@ -124,6 +124,23 @@ class PrepareTopologyTests(unittest.TestCase):
                     (Path(destination) / "complex.gro").read_text(), coordinates
                 )
 
+    def test_preserves_coordinate_precision_velocities_and_triclinic_box(self):
+        records = [
+            f"{index + 100:5d}{residue:<5}{residue:>5}{index + 200:5d}"
+            f"{index / 7:10.5f}{0.23456:10.5f}{0.34567:10.5f}"
+            f"{0.123456:10.6f}{0.234567:10.6f}{0.345678:10.6f}\n"
+            for index, residue in enumerate(("GLY", "unk", "SOL", "CL", "NA", "CL"), 1)
+        ]
+        header = "High precision frame\n6\n"
+        box = "2.123456 2.234567 2.345678 0 0 0.12345 0 0.23456 0.34567\n"
+        coordinates = header + "".join(records) + box
+        (self.boresch / "ClosestRestraintFrame.gro").write_text(coordinates)
+        self.prepare()
+        self.assertEqual(
+            (self.complex / "complex.gro").read_text(),
+            header + "".join(records[:3] + [records[4], records[3], records[5]]) + box,
+        )
+
     def test_copies_other_direct_local_includes(self):
         (self.vanilla / "parameters").mkdir()
         (self.vanilla / "parameters" / "extra.itp").write_text("; extra parameters\n")
@@ -201,7 +218,7 @@ class PrepareTopologyTests(unittest.TestCase):
         ):
             with self.subTest(coordinates=coordinates):
                 (self.boresch / "ClosestRestraintFrame.gro").write_text(coordinates)
-                with self.assertRaisesRegex(ValueError, "Malformed GRO"):
+                with self.assertRaises((OSError, ValueError)):
                     self.prepare()
                 self.assertEqual(list(self.complex.iterdir()), [])
 

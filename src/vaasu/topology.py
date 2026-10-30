@@ -5,6 +5,8 @@ import shutil
 from math import isfinite
 from pathlib import Path
 
+import MDAnalysis as mda
+
 _INCLUDE = re.compile(r'^\s*#\s*include\s+["<]([^">]+)[">]', re.MULTILINE)
 
 
@@ -108,43 +110,33 @@ def _regroup_topology(topology: str) -> tuple[str, dict[str, int]]:
     return grouped + "".join(output[molecules_end:]), ion_counts
 
 
-def _regroup_coordinates(coordinates: str) -> tuple[str, dict[str, int]]:
+def _regroup_coordinates(frame_path: Path) -> tuple[str, dict[str, int]]:
     """Reorder only trailing monatomic ions, preserving the original GRO records."""
-    lines = coordinates.splitlines(keepends=True)
-    other_atoms = []
-    ions = {"NA": [], "CL": []}
-    ions_started = False
-    for line in lines[2:-1]:
-        # Validate fixed-width atom fields without rewriting coordinates or numbering.
-        try:
-            if len(line.rstrip("\r\n")) < 44:
-                raise ValueError
-            int(line[:5])
-            int(line[15:20])
-            position = [float(line[start : start + 8]) for start in (20, 28, 36)]
-            if (
-                not line[5:10].strip()
-                or not line[10:15].strip()
-                or not all(isfinite(value) for value in position)
-            ):
-                raise ValueError
-        except ValueError:
-            raise ValueError(f"Malformed GRO atom record: {line.strip()}") from None
-        name = line[5:10].strip()
-        if name in ions:
-            ions_started = True
-            ions[name].append(line)
-        else:
-            if ions_started:
-                # Moving this atom ahead of an ion would change its restraint index.
-                raise ValueError(
-                    "NA/CL atoms must follow all non-ion atoms to preserve anchor indices."
-                )
-            other_atoms.append(line)
+    # Let MDAnalysis parse the GRO file; atom types and masses are not needed.
+    universe = mda.Universe(str(frame_path), to_guess=())
+    try:
+        if not all(universe.atoms.resnames) or not all(
+            isfinite(value) for value in universe.atoms.positions.flat
+        ):
+            raise ValueError("Malformed GRO atom records.")
 
-    # Keep the header, box and within-species atom order exactly as supplied.
-    grouped = lines[:2] + other_atoms + ions["NA"] + ions["CL"] + lines[-1:]
-    return "".join(grouped), {name: len(records) for name, records in ions.items()}
+        other_atoms = universe.select_atoms("not resname NA CL")
+        sodium = universe.select_atoms("resname NA")
+        chloride = universe.select_atoms("resname CL")
+        # Non-ion atoms must already be first so their restraint indices stay valid.
+        if other_atoms.indices.tolist() != list(range(other_atoms.n_atoms)):
+            raise ValueError(
+                "NA/CL atoms must follow all non-ion atoms to preserve anchor indices."
+            )
+        ordered_atoms = other_atoms + sodium + chloride
+
+        # Reorder original records to preserve precision, velocities and box text.
+        lines = frame_path.read_bytes().decode("utf-8").splitlines(keepends=True)
+        records = [lines[index + 2] for index in ordered_atoms.indices]
+        grouped = lines[:2] + records + lines[-1:]
+        return "".join(grouped), {"NA": sodium.n_atoms, "CL": chloride.n_atoms}
+    finally:
+        universe.trajectory.close()
 
 
 def prepare_topology(
@@ -179,10 +171,9 @@ def prepare_topology(
                 topology[: match.start(1)] + str(source) + topology[match.end(1) :]
             )
     frame_path = boresch_path / "ClosestRestraintFrame.gro"
-    coordinates = frame_path.read_bytes().decode("utf-8")
     # Coordinates and topology must describe the same number of each ion species.
     grouped_topology, topology_ions = _regroup_topology(topology)
-    grouped_coordinates, coordinate_ions = _regroup_coordinates(coordinates)
+    grouped_coordinates, coordinate_ions = _regroup_coordinates(frame_path)
     if coordinate_ions != topology_ions:
         raise ValueError(
             f"Ion counts disagree between coordinates {coordinate_ions} and topology {topology_ions}."
