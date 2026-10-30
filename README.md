@@ -1,6 +1,6 @@
 # VAASU
 
-VAASU's An ABFEP Setup Utilit
+VAASU's An ABFEP Setup Utility
 
 ## Setup and activation
 
