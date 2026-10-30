@@ -5,7 +5,9 @@ description = "Minimal tools for setting up absolute binding free energy perturb
 readme = "README.md"
 requires-python = ">=3.12"
 license-files = ["LICENSE"]
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0.3",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.18,<0.13.0"]
