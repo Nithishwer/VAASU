@@ -1,7 +1,6 @@
 # VAASU
 
-VAASU's An ABFEP Setup Utility: a Python library with its own uv environment.
-ABFE tools are not implemented yet. Requires uv and Python 3.12.
+VAASU's An ABFEP Setup Utilit
 
 ## Setup and activation
 
