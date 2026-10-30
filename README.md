@@ -73,12 +73,13 @@ for ligand in config["ligands"]:
 ```
 
 The vanilla directory must contain compatible `prod.tpr` and `prod.xtc` files,
-`topol.top`, and a `toppar/` directory. Quoted topology includes must use local
-paths beneath the vanilla directory; absolute paths and `..` are rejected.
+`topol.top`, and a `toppar/` directory. Includes can use quotes or angle brackets.
 Directly referenced include files are checked before restraint fitting. Referenced
 local `.ff` directories and the whole `toppar/` directory are copied, retaining
 their nested includes. Other directly referenced files are copied at their
-relative paths. Full include preprocessing remains GROMACS's responsibility.
+relative paths. Absolute includes remain external; includes containing `..` are
+resolved to absolute source paths in the copied topology. Full include
+preprocessing remains GROMACS's responsibility.
 Restraint searches use protein CA atoms as host anchors and exclude ligand atoms
 whose names begin with H. No GROMACS executable or separate generator script is
 needed for this step.
@@ -96,12 +97,13 @@ Each ABFE destination receives a `boresch/` directory containing
 
 All NA/CL atoms and molecule entries must follow the non-ion system. Regrouping
 preserves non-ion atom indices, atom records, coordinates, and the box; ion counts
-must agree between coordinates and topology. Inputs already containing an
-`[ intermolecular_interactions ]` section are rejected. The topology must have a
-single final `[ molecules ]` section. Alchemical systems, indices, simulation
-windows, and job scripts are not generated yet.
+must agree between coordinates and topology. The topology must have a single
+`[ molecules ]` section as its final system section; existing intermolecular
+restraint sections are preserved after it. Generated restraints are appended.
+Alchemical systems, indices, simulation windows, and job scripts are not generated
+yet.
 
-Existing `complex` or `boresch` paths, including symlinks, raise `FileExistsError`.
+Existing `complex` or `boresch` paths raise `FileExistsError`.
 Failures propagate and partial output is preserved. Restraint failures leave the
 empty `complex/` directory and any partial `boresch/` output. Inspect and remove or
 move partial directories explicitly before retrying. Source files are not changed.

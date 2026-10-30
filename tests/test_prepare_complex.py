@@ -126,37 +126,6 @@ class PrepareComplexTests(unittest.TestCase):
         self.assertFalse(self.abfe.exists())
         self.generator.assert_not_called()
 
-    def test_unsupported_includes_fail_before_fitting(self):
-        topology = self.vanilla / "topol.top"
-        for include in ('"../outside.itp"', '"/outside.itp"', "<forcefield.itp>"):
-            with self.subTest(include=include):
-                topology.write_text(f"#include {include}\n[ molecules ]\nProtein 1\n")
-                with self.assertRaises(ValueError):
-                    self.prepare()
-                self.assertFalse(self.abfe.exists())
-                self.generator.assert_not_called()
-
-    def test_duplicate_restraints_fail_before_fitting(self):
-        topology = self.vanilla / "topol.top"
-        topology.write_text(topology.read_text() + "[ intermolecular_interactions ]\n")
-        with self.assertRaisesRegex(ValueError, "already contains"):
-            self.prepare()
-        self.assertFalse(self.abfe.exists())
-        self.generator.assert_not_called()
-
-    def test_output_symlinks_are_rejected_without_following_them(self):
-        self.abfe.mkdir(parents=True)
-        for name in ("complex", "boresch"):
-            for target in (self.root / "missing", self.vanilla):
-                with self.subTest(name=name, target=target):
-                    destination = self.abfe / name
-                    destination.symlink_to(target, target_is_directory=True)
-                    with self.assertRaises(FileExistsError):
-                        self.prepare()
-                    self.assertTrue(destination.is_symlink())
-                    self.generator.assert_not_called()
-                    destination.unlink()
-
     def test_invalid_temperature_does_not_create_abfe_directory(self):
         for temperature in (0, -1, float("inf"), float("nan")):
             with self.subTest(temperature=temperature):

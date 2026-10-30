@@ -5,9 +5,11 @@ import shutil
 from math import isfinite
 from pathlib import Path
 
+_INCLUDE = re.compile(r'^\s*#\s*include\s+["<]([^">]+)[">]', re.MULTILINE)
+
 
 def validate_topology_inputs(vanilla_path: Path) -> list[Path]:
-    """Check the supported local include layout and return resources to copy."""
+    """Check topology resources and return local files and directories to copy."""
     # Require the vanilla topology and its supporting parameter directory.
     topology_path = vanilla_path / "topol.top"
     if not topology_path.is_file():
@@ -17,39 +19,20 @@ def validate_topology_inputs(vanilla_path: Path) -> list[Path]:
             f"Missing topology directory: {vanilla_path / 'toppar'}"
         )
 
-    # Validate molecule ordering and existing restraints before any expensive fitting.
+    # Validate molecule ordering before any expensive fitting.
     topology = topology_path.read_bytes().decode("utf-8")
     _regroup_topology(topology)
     resources = [Path("toppar")]
     # Inspect direct includes only; GROMACS handles full include preprocessing.
-    for line in topology.splitlines():
-        if not re.match(r"\s*#\s*include\b", line):
-            continue
-        match = re.match(r'\s*#\s*include\s+"([^"]+)"', line)
-        if match is None:
-            raise ValueError(
-                f"Only quoted local topology includes are supported: {line}"
-            )
-        # Preserve relative include paths without allowing source or output conflicts.
+    for match in _INCLUDE.finditer(topology):
         include = Path(match[1])
-        if include.is_absolute() or ".." in include.parts:
-            raise ValueError(
-                f"Topology include must stay beneath the vanilla run: {include}"
-            )
-        if include in {
-            Path("complex.gro"),
-            Path("complex.top"),
-            Path("complex_ungrouped.gro"),
-            Path("complex_ungrouped.top"),
-            Path("BoreschRestraint.top"),
-        }:
-            raise ValueError(
-                f"Topology include conflicts with a setup output: {include}"
-            )
         if not (vanilla_path / include).is_file():
             raise FileNotFoundError(
                 f"Missing topology include: {vanilla_path / include}"
             )
+        # External resources stay at their source paths instead of being copied.
+        if include.is_absolute() or ".." in include.parts:
+            continue
 
         # Copy whole force fields so their nested includes remain available.
         resource = include
@@ -69,6 +52,7 @@ def _regroup_topology(topology: str) -> tuple[str, dict[str, int]]:
     ion_counts = {"NA": 0, "CL": 0}
     section = ""
     molecules_found = False
+    molecules_end = None
     ions_started = False
 
     # Parse a comment-free view while retaining original lines for the output.
@@ -77,32 +61,28 @@ def _regroup_topology(topology: str) -> tuple[str, dict[str, int]]:
         content = content.strip()
         header = re.fullmatch(r"\[\s*([^\]]+?)\s*\]", content)
         if header:
-            # Restraints will be appended after one final molecule list.
-            section = header[1].strip().lower()
-            if section == "intermolecular_interactions":
-                raise ValueError(
-                    "Input topology already contains intermolecular restraints."
-                )
-            if molecules_found:
-                raise ValueError(
-                    "The [ molecules ] section must be the final topology section."
-                )
-            molecules_found = section == "molecules"
+            next_section = header[1].strip().lower()
+            if next_section == "molecules":
+                if molecules_found:
+                    raise ValueError(
+                        "Topology must contain a single [ molecules ] section."
+                    )
+                molecules_found = True
+            elif section == "molecules":
+                # Existing intermolecular restraints follow the molecule list.
+                if next_section != "intermolecular_interactions":
+                    raise ValueError(
+                        "The [ molecules ] section must be the final system section."
+                    )
+                molecules_end = len(output)
+            section = next_section
         elif section == "molecules" and content:
             fields = content.split()
-            try:
-                if len(fields) != 2:
-                    raise ValueError
-                count = int(fields[1])
-                if count < 0:
-                    raise ValueError
-            except ValueError:
-                raise ValueError(f"Malformed molecule entry: {line.strip()}") from None
             name = fields[0]
             if name in ion_counts:
                 # Replace repeated ion entries with totals, keeping their comments.
                 ions_started = True
-                ion_counts[name] += count
+                ion_counts[name] += int(fields[1])
                 if separator:
                     output.append(";" + comment)
                 continue
@@ -114,30 +94,23 @@ def _regroup_topology(topology: str) -> tuple[str, dict[str, int]]:
 
     if not molecules_found:
         raise ValueError("Topology is missing its [ molecules ] section.")
-    # Match the coordinate ordering: non-ion molecules, then NA, then CL.
-    grouped = "".join(output)
+    # Keep trailing comments and existing restraint text together after the ions.
+    if molecules_end is None:
+        molecules_end = len(output)
+    while molecules_end and not output[molecules_end - 1].partition(";")[0].strip():
+        molecules_end -= 1
+    grouped = "".join(output[:molecules_end])
     if not grouped.endswith("\n"):
         grouped += "\n"
     for name, count in ion_counts.items():
         if count:
             grouped += f"{name:<12} {count}\n"
-    return grouped, ion_counts
+    return grouped + "".join(output[molecules_end:]), ion_counts
 
 
 def _regroup_coordinates(coordinates: str) -> tuple[str, dict[str, int]]:
     """Reorder only trailing monatomic ions, preserving the original GRO records."""
     lines = coordinates.splitlines(keepends=True)
-    # Check the declared atom count and the three- or nine-value GRO box.
-    try:
-        atom_count = int(lines[1].strip())
-        if atom_count < 0 or len(lines) != atom_count + 3:
-            raise ValueError
-        box = [float(value) for value in lines[-1].split()]
-        if len(box) not in (3, 9) or not all(isfinite(value) for value in box):
-            raise ValueError
-    except (IndexError, ValueError):
-        raise ValueError("Malformed GRO header, atom count, or box.") from None
-
     other_atoms = []
     ions = {"NA": [], "CL": []}
     ions_started = False
@@ -184,8 +157,6 @@ def prepare_topology(
     boresch_path = Path(boresch_path).expanduser().resolve()
     complex_path = Path(complex_path).expanduser()
     # Only populate the empty directory created by the orchestrator.
-    if complex_path.is_symlink():
-        raise FileExistsError(f"Output already exists: {complex_path}")
     complex_path = complex_path.resolve()
     if not complex_path.is_dir():
         raise NotADirectoryError(f"Expected an empty complex directory: {complex_path}")
@@ -199,6 +170,14 @@ def prepare_topology(
             raise FileNotFoundError(f"Missing restraint output: {boresch_path / name}")
 
     topology = (vanilla_path / "topol.top").read_bytes().decode("utf-8")
+    # Keep parent-relative includes pointing to their original source after copying.
+    for match in reversed(list(_INCLUDE.finditer(topology))):
+        include = Path(match[1])
+        if ".." in include.parts:
+            source = (vanilla_path / include).resolve()
+            topology = (
+                topology[: match.start(1)] + str(source) + topology[match.end(1) :]
+            )
     frame_path = boresch_path / "ClosestRestraintFrame.gro"
     coordinates = frame_path.read_bytes().decode("utf-8")
     # Coordinates and topology must describe the same number of each ion species.

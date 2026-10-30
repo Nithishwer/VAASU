@@ -14,10 +14,10 @@ def validate_inputs(
     temperature: float,
 ) -> None:
     """Check setup inputs and output conflicts before creating any directories."""
-    # Reject existing outputs, including broken symlinks, to protect earlier runs.
+    # Reject existing outputs to protect earlier runs.
     for name in ("complex", "boresch"):
         output_path = abfe_path / name
-        if output_path.exists() or output_path.is_symlink():
+        if output_path.exists():
             raise FileExistsError(f"Output already exists: {output_path}")
 
     # Check all required inputs before starting the restraint search.

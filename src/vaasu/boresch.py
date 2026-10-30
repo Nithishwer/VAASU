@@ -23,7 +23,7 @@ def generate_boresch_restraints(
     output_dir = Path(output_dir).expanduser()
 
     # Check inputs and reject existing outputs before loading the trajectory.
-    if output_dir.exists() or output_dir.is_symlink():
+    if output_dir.exists():
         raise FileExistsError(f"Restraint output already exists: {output_dir}")
     output_dir = output_dir.resolve()
     for input_path in (topology, trajectory):

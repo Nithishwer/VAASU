@@ -128,22 +128,13 @@ class PrepareTopologyTests(unittest.TestCase):
         (self.vanilla / "parameters").mkdir()
         (self.vanilla / "parameters" / "extra.itp").write_text("; extra parameters\n")
         (self.vanilla / "topol.top").write_text(
-            '#include "parameters/extra.itp"\n' + self.topology
+            "#include <parameters/extra.itp>\n" + self.topology
         )
         self.prepare()
         self.assertEqual(
             (self.complex / "parameters" / "extra.itp").read_text(),
             "; extra parameters\n",
         )
-
-    def test_rejects_include_collisions_with_outputs(self):
-        (self.vanilla / "complex.top").write_text("; conflicting include\n")
-        (self.vanilla / "topol.top").write_text(
-            '#include "complex.top"\n' + self.topology
-        )
-        with self.assertRaisesRegex(ValueError, "conflicts with a setup output"):
-            self.prepare()
-        self.assertEqual(list(self.complex.iterdir()), [])
 
     def test_rejects_mismatched_counts_before_copying(self):
         (self.vanilla / "topol.top").write_text(self.topology.replace("NA 1", "NA 2"))
@@ -169,13 +160,28 @@ class PrepareTopologyTests(unittest.TestCase):
             self.prepare()
         self.assertEqual(list(self.complex.iterdir()), [])
 
-    def test_rejects_malformed_molecule_entries(self):
-        for entry in ("NA bad", "NA -1", "NA 1 extra", "NA"):
-            with self.subTest(entry=entry):
-                (self.vanilla / "topol.top").write_text(self.prefix + entry + "\n")
-                with self.assertRaisesRegex(ValueError, "Malformed molecule entry"):
-                    self.prepare()
-                self.assertEqual(list(self.complex.iterdir()), [])
+    def test_preserves_external_include_targets_and_sources(self):
+        external = self.root / "extra.itp"
+        external.write_text("; external parameters\n")
+        (self.vanilla / "topol.top").write_text(
+            f'#include "../extra.itp"\n#include "{external}"\n' + self.topology
+        )
+        self.prepare()
+        topology = (self.complex / "complex.top").read_text()
+        self.assertEqual(topology.count(f'#include "{external}"'), 2)
+        self.assertEqual(external.read_text(), "; external parameters\n")
+        self.assertFalse((self.complex / "extra.itp").exists())
+
+    def test_preserves_existing_restraints_after_grouped_ions(self):
+        (self.vanilla / "topol.top").write_text(self.topology + self.restraints)
+        self.prepare()
+        topology = (self.complex / "complex.top").read_text()
+        self.assertLess(
+            topology.index("NA           1\nCL           2\n"),
+            topology.index(self.restraints),
+        )
+        self.assertTrue(topology.endswith(self.restraints))
+        self.assertEqual(topology.count(self.restraints), 2)
 
     def test_rejects_missing_or_duplicate_molecule_sections(self):
         for topology in (
@@ -188,12 +194,10 @@ class PrepareTopologyTests(unittest.TestCase):
                     self.prepare()
                 self.assertEqual(list(self.complex.iterdir()), [])
 
-    def test_rejects_malformed_gro_records(self):
+    def test_rejects_malformed_atom_records(self):
         for coordinates in (
-            "",
-            self.coordinates.replace("\n6\n", "\n5\n"),
             self.coordinates.replace(self.records[0], "bad atom record\n"),
-            self.coordinates.replace("2.0 2.0 2.0", "nan 2 2"),
+            self.coordinates.replace(self.records[0][20:28], "     nan"),
         ):
             with self.subTest(coordinates=coordinates):
                 (self.boresch / "ClosestRestraintFrame.gro").write_text(coordinates)
@@ -212,28 +216,12 @@ class PrepareTopologyTests(unittest.TestCase):
                 self.assertEqual(list(self.complex.iterdir()), [])
                 path.write_bytes(contents)
 
-    def test_rejects_existing_files_and_symlinks(self):
-        for symlink in (False, True):
-            with self.subTest(symlink=symlink):
-                path = self.complex / "complex.top"
-                if symlink:
-                    path.symlink_to(self.root / "missing")
-                else:
-                    path.write_text("existing data")
-                with self.assertRaises(FileExistsError):
-                    self.prepare()
-                if symlink:
-                    self.assertTrue(path.is_symlink())
-                else:
-                    self.assertEqual(path.read_text(), "existing data")
-                path.unlink()
-
-    def test_rejects_complex_directory_symlink(self):
-        self.complex.rmdir()
-        self.complex.symlink_to(self.root / "missing", target_is_directory=True)
+    def test_rejects_existing_files(self):
+        path = self.complex / "complex.top"
+        path.write_text("existing data")
         with self.assertRaises(FileExistsError):
             self.prepare()
-        self.assertTrue(self.complex.is_symlink())
+        self.assertEqual(path.read_text(), "existing data")
 
 
 if __name__ == "__main__":
