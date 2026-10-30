@@ -1,2 +1,2 @@
-# VASU
-VASU stands for VASU is an ABFE Setup Utility
+# VAASU
+VAASU stands for VAASU's A ABFEP Setup Utility
