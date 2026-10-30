@@ -901,6 +901,7 @@ name = "vaasu"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "mdanalysis" },
     { name = "mdrestraintsgenerator" },
     { name = "pyyaml" },
 ]
@@ -912,6 +913,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "mdanalysis", specifier = ">=2.11.0,<3" },
     { name = "mdrestraintsgenerator", git = "https://github.com/Nithishwer/MDRestraintsGenerator.git?rev=49a454755b5bd3c842c83852122a43313acfcbcd" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
