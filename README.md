@@ -11,6 +11,9 @@ source .venv/bin/activate
 ```
 
 This creates `.venv` and installs VAASU in editable mode with Ruff.
+
+MDRestraintsGenerator and its Python dependencies install automatically from the
+pinned [fork](https://github.com/Nithishwer/MDRestraintsGenerator); no separate clone is needed.
 Once activated, use `python` directly from any directory.
 
 ```bash

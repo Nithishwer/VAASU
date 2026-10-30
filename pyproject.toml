@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license-files = ["LICENSE"]
 dependencies = [
+    "mdrestraintsgenerator @ git+https://github.com/Nithishwer/MDRestraintsGenerator.git@49a454755b5bd3c842c83852122a43313acfcbcd",
     "pyyaml>=6.0.3",
 ]
 
