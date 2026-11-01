@@ -20,13 +20,22 @@ class PrepareComplexTests(unittest.TestCase):
         for name in ("prod.tpr", "prod.xtc"):
             (self.vanilla / name).touch()
         (self.vanilla / "toppar").mkdir()
-        (self.vanilla / "toppar" / "ligand.itp").write_text("; ligand\n")
+        (self.vanilla / "toppar" / "ligand.itp").write_text(
+            "[ moleculetype ]\nunk 3\n[ atoms ]\n1 c1 1 unk unk 1 0 12.0\n"
+        )
+        (self.vanilla / "toppar" / "ligand_atomtypes.itp").write_text(
+            "[ atomtypes ]\nc1 6 12.0 0 A 0.3 0.4\n"
+        )
         force_field = self.vanilla / "example.ff"
         force_field.mkdir()
-        (force_field / "forcefield.itp").write_text("; force field\n")
+        (force_field / "forcefield.itp").write_text(
+            "[ defaults ]\n1 2 yes 0.5 0.8333\n"
+        )
         (self.vanilla / "topol.top").write_text(
             '#include "./example.ff/forcefield.itp"\n'
+            '#include "toppar/ligand_atomtypes.itp"\n'
             '#include "toppar/ligand.itp"\n'
+            "[ system ]\nFixture\n"
             "[ molecules ]\nProtein 1\nunk 1\nCL 1\nNA 1\nCL 1\n"
         )
         self.abfe = self.root / "nested" / "abfe"
@@ -54,6 +63,9 @@ class PrepareComplexTests(unittest.TestCase):
             self.abfe,
             ligand_selection="resname unk",
             temperature=kwargs.get("temperature", 298.15),
+            ligand_itp="toppar/ligand.itp",
+            atomtype_itp="toppar/ligand_atomtypes.itp",
+            **{key: value for key, value in kwargs.items() if key != "temperature"},
         )
 
     def test_prepares_complex_and_passes_explicit_paths(self):
@@ -64,6 +76,19 @@ class PrepareComplexTests(unittest.TestCase):
         self.assertEqual(
             {path.name for path in result.iterdir()},
             {
+                "job_complex_archer_test.sh",
+                "job_complex_archer.sh",
+                "job_complex_archer_contd.sh",
+                "job_complex_archer_lowpriority.sh",
+                "job_complex_archer_contd_lowpriority.sh",
+                "plumed.dat",
+                "index_alchemical.ndx",
+                "simulations_list.txt",
+                *[f"rest.{number:02d}" for number in range(12)],
+                *[f"coul.{number:02d}" for number in range(11)],
+                *[f"vdw.{number:02d}" for number in range(21)],
+                "complex_alchemical.gro",
+                "complex_alchemical.top",
                 "complex.gro",
                 "complex.top",
                 "complex_ungrouped.gro",
@@ -87,6 +112,32 @@ class PrepareComplexTests(unittest.TestCase):
             temperature=298.15,
         )
 
+    def test_forwards_custom_coupling_and_window_settings(self):
+        result = self.prepare(
+            temperature=310.0,
+            job_name="DOR_10",
+            solvent_selection="resname CL",
+            lambda_schedule={"rest": [0.0, 1.0], "coul": [0.0, 1.0], "vdw": [0.0, 1.0]},
+        )
+        self.assertEqual(
+            len((result / "simulations_list.txt").read_text().splitlines()), 6
+        )
+        job = (result / "job_complex_archer.sh").read_text()
+        self.assertIn("#SBATCH --job-name=DOR_10\n", job)
+        self.assertIn("#SBATCH --ntasks=6\n", job)
+        self.assertIn("#SBATCH --nodes=3\n", job)
+        self.assertIn("windows=(rest.00 rest.01 coul.00 coul.01 vdw.00 vdw.01)", job)
+
+        index = (result / "index_alchemical.ndx").read_text()
+        self.assertIn("[ Solvent ]\n4 5", index)
+        self.assertIn("[ Solute ]\n1 2 3", index)
+        mdp = (result / "coul.00/prod/coul.prod.00.mdp").read_text()
+        self.assertIn("init-lambda-state        = 2", mdp)
+        temperature_line = next(
+            line for line in mdp.splitlines() if line.startswith("ref-t")
+        )
+        self.assertEqual(temperature_line.split("=", 1)[1].split(), ["310.0", "310.0"])
+
     def test_rejects_existing_outputs_without_touching_them(self):
         for name in ("complex", "boresch"):
             with self.subTest(name=name):
@@ -108,6 +159,7 @@ class PrepareComplexTests(unittest.TestCase):
             "topol.top",
             "example.ff/forcefield.itp",
             "toppar/ligand.itp",
+            "toppar/ligand_atomtypes.itp",
         ):
             with self.subTest(name=name):
                 missing = self.vanilla / name
@@ -118,6 +170,16 @@ class PrepareComplexTests(unittest.TestCase):
                 self.assertFalse(self.abfe.exists())
                 self.generator.assert_not_called()
                 missing.write_bytes(contents)
+
+    def test_alchemical_parameters_are_not_parsed_before_fitting(self):
+        self.generator.side_effect = RuntimeError("fitting reached")
+        with (
+            patch("vaasu.alchemy._read_parameters") as read_parameters,
+            self.assertRaisesRegex(RuntimeError, "fitting reached"),
+        ):
+            self.prepare()
+        self.generator.assert_called_once()
+        read_parameters.assert_not_called()
 
     def test_missing_toppar_fails_before_fitting(self):
         (self.vanilla / "toppar").rename(self.vanilla / "saved_toppar")
